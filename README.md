@@ -45,6 +45,10 @@ python fmr/scripts/run_linuxone_demo.py --samples 4000 --consistency-samples 5
 
 Open [`fmr/dashboard/index.html`](fmr/dashboard/index.html) in a browser. It is a static dashboard with no build step. Use the source selector to distinguish the earlier model benchmark data from the synthetic demo data.
 
+## Optional live GPU API demo
+
+`fmr/colab_serve_api.py` is an experimental Colab/ngrok starter. Its API currently has no user authentication and creates a public tunnel. Use only generated, public, or properly de-identified images; never send patient-identifiable data, and stop the tunnel after the demo.
+
 ## Reproduce prior model benchmarks
 
 `fmr/notebooks/colab_real_pipeline.ipynb` contains the GPU/Colab workflow. Use Colab's Secrets panel for `HF_TOKEN` and `GH_TOKEN`; do not paste credentials into notebook source. The notebook reads the public `main` branch, and the results helper pushes artifacts to this repository. The current notebook is a starting point for a new run; the committed `fmr/outputs/real/` files are earlier outputs. The LinuxONE VM measurements above show that this GPU workflow has not been reproduced as medical-model inference on the supplied CPU-only VM.
