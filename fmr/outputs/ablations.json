@@ -1,0 +1,94 @@
+{
+  "weight_sensitivity": {
+    "n_weightings": 66,
+    "auroc_mean": 0.9886197238761423,
+    "auroc_std": 0.016544937790680423,
+    "auroc_min": 0.916717185274996,
+    "auroc_max": 0.999960888819358,
+    "best": {
+      "auroc": 0.999960888819358,
+      "weights": {
+        "a": 0.6000000000000001,
+        "b": 0.1,
+        "c": 0.29999999999999993
+      }
+    },
+    "default_weights_auroc": 0.999852444182123
+  },
+  "grid_sensitivity": {
+    "2": {
+      "auroc_signal_b": 0.856518558808635,
+      "auroc_fs": 0.9996061293771218
+    },
+    "3": {
+      "auroc_signal_b": 0.9087876912304393,
+      "auroc_fs": 0.999731167670099
+    },
+    "4": {
+      "auroc_signal_b": 0.9331607804890247,
+      "auroc_fs": 0.9998311983044808
+    },
+    "6": {
+      "auroc_signal_b": 0.9378934798782128,
+      "auroc_fs": 0.9999437327681603
+    },
+    "8": {
+      "auroc_signal_b": 0.9459803314765146,
+      "auroc_fs": 0.9998311983044808
+    }
+  },
+  "seed_stability": {
+    "signal_a": {
+      "mean": 0.9999937340398584,
+      "std": 7.928150938459808e-06
+    },
+    "signal_b": {
+      "mean": 0.9349669463436466,
+      "std": 0.0018745468583967263
+    },
+    "signal_c": {
+      "mean": 0.913538011647694,
+      "std": 0.003347332294529468
+    },
+    "fs": {
+      "mean": 0.999704408925752,
+      "std": 0.00017581864706369408
+    }
+  },
+  "abstention_power": {
+    "alpha_curve": {
+      "0.02": {
+        "feasible": true,
+        "coverage": 0.49066666666666664,
+        "retained_error": 0.0
+      },
+      "0.05": {
+        "feasible": true,
+        "coverage": 0.508,
+        "retained_error": 0.0
+      },
+      "0.1": {
+        "feasible": true,
+        "coverage": 0.572,
+        "retained_error": 0.04895104895104896
+      },
+      "0.15": {
+        "feasible": true,
+        "coverage": 0.588,
+        "retained_error": 0.061224489795918324
+      },
+      "0.2": {
+        "feasible": true,
+        "coverage": 0.6786666666666666,
+        "retained_error": 0.11394891944990182
+      }
+    },
+    "min_cal_size_for_alpha": {
+      "0.02": 1000,
+      "0.05": 500,
+      "0.1": 200,
+      "0.15": 200,
+      "0.2": 100
+    }
+  }
+}

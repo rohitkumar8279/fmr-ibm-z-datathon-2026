@@ -1,0 +1,29 @@
+{
+  "dataset": "synthetic",
+  "split": "test",
+  "n": 1000,
+  "models": {
+    "mock_reasoner": {
+      "name": "mock-reasoner",
+      "is_reasoning": true,
+      "accuracy": 0.741,
+      "per_modality": {
+        "ct": 0.728744939271255,
+        "mri": 0.7441860465116279,
+        "pathology": 0.7404580152671756,
+        "xray": 0.7510729613733905
+      }
+    },
+    "mock_plain": {
+      "name": "mock-plain",
+      "is_reasoning": false,
+      "accuracy": 0.741,
+      "per_modality": {
+        "ct": 0.728744939271255,
+        "mri": 0.7441860465116279,
+        "pathology": 0.7404580152671756,
+        "xray": 0.7510729613733905
+      }
+    }
+  }
+}

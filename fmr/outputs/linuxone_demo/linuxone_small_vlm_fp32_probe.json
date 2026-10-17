@@ -1,0 +1,22 @@
+{
+  "model": "HuggingFaceTB/SmolVLM-256M-Instruct",
+  "dtype": "fp32",
+  "threads": 4,
+  "architecture": "s390x",
+  "python": "3.12.15",
+  "torch": "2.11.0+cpu",
+  "transformers": "5.19.0",
+  "medical_model": false,
+  "input_kind": "generated colored-shape image; no patient data",
+  "max_new_tokens": 8,
+  "scope": "single-image runtime smoke probe; not an FMR run or medical evaluation",
+  "processor_load_seconds": 0.488,
+  "model_load_seconds": 3.605,
+  "peak_rss_after_load_mib": 2020.9,
+  "first_generation_seconds": 119.22,
+  "generated_tokens": 8,
+  "answer": "The shapes are blue and red.",
+  "peak_rss_after_generation_mib": 2368.6,
+  "answer_is_medically_validated": false,
+  "fmr_integration": "not tested"
+}

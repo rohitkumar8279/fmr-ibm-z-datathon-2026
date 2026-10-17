@@ -1,0 +1,31 @@
+{
+  "run_kind": "synthetic_mock_pipeline",
+  "clinical_inference": false,
+  "platform_machine": "s390x",
+  "platform_system": "Linux",
+  "python_version": "3.12.15",
+  "dataset": "synthetic",
+  "model": "mock_reasoner",
+  "samples": 4000,
+  "consistency_samples": 5,
+  "alpha": 0.05,
+  "delta": 0.05,
+  "elapsed_seconds": 5.711,
+  "n_train": 2000,
+  "n_cal": 1000,
+  "n_test": 1000,
+  "validation": {
+    "label_source": "grounded_latent",
+    "auroc_signal_a": 0.9999279351416275,
+    "auroc_signal_b": 0.9269502552297066,
+    "auroc_signal_c": 0.9170833750375337,
+    "auroc_fs": 0.9990351316184567,
+    "auroc_confidence": 0.9999679711740567,
+    "mean_iou_grounded": 0.4842452856481066,
+    "mean_iou_ungrounded": 0.06262135922330098
+  },
+  "output_files": [
+    "fmr_results.json",
+    "fmr_records.json"
+  ]
+}

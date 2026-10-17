@@ -1,0 +1,29 @@
+{
+  "model": "HuggingFaceTB/SmolVLM-256M-Instruct",
+  "platform": "IBM LinuxONE s390x CPU, 7.3 GiB host RAM",
+  "medical_model": false,
+  "attempts": [
+    {
+      "dtype": "bf16",
+      "max_new_tokens": 32,
+      "status": "incomplete",
+      "elapsed_before_stop_seconds": 247,
+      "reason": "Still generating at the probe time limit; no answer or latency result was produced.",
+      "observed_peak_rss_mib": 1452
+    },
+    {
+      "dtype": "fp32",
+      "max_new_tokens": 8,
+      "status": "completed",
+      "processor_load_seconds": 0.488,
+      "model_load_seconds": 3.605,
+      "generation_seconds": 119.22,
+      "generated_tokens": 8,
+      "peak_rss_after_load_mib": 2020.9,
+      "peak_rss_after_generation_mib": 2368.6,
+      "answer": "The shapes are blue and red.",
+      "input_kind": "synthetic colored-shape image"
+    }
+  ],
+  "interpretation": "This establishes generic image-text generation on s390x only. It is not medical-model validation and is too slow for the current multi-pass FMR path."
+}

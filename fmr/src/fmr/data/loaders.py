@@ -1,0 +1,355 @@
+"""Unified dataset loading + splitting.
+
+``load_dataset`` returns a list of :class:`Sample` regardless of source, so the
+harness never branches on dataset identity. The synthetic source always works
+offline. The real loaders pull public Hugging Face mirrors (no token needed for
+VQA-RAD / SLAKE / PathVQA) and normalize every record to the ``Sample`` schema,
+including SLAKE/VQA-RAD bounding boxes → normalized :class:`Region` for Signal B.
+
+Design choices (see DECISIONS.md):
+  * HF hub mirrors: vqa_rad -> flaviagiammarino/vqa-rad,
+    slake -> BoKelvin/SLAKE, pathvqa -> flaviagiammarino/path-vqa.
+  * OmniMedVQA needs a manual download (gated distribution) -> file-based loader.
+  * Images are kept as PIL objects in ``Sample.image`` (the HF backend converts
+    them to model tensors + builds the blank/mismatch variants). On the offline
+    mock path ``image`` stays None.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from ..types import Sample
+from .regions import Region
+from .synthetic import build_synthetic_dataset
+
+_HF_REPOS = {
+    "vqa_rad": "flaviagiammarino/vqa-rad",
+    "slake": "BoKelvin/SLAKE",
+    "pathvqa": "flaviagiammarino/path-vqa",
+}
+_MODALITY_KEYWORDS = {  # crude modality tagging from question/location text
+    "xray": ("x-ray", "xray", "chest", "radiograph"),
+    "ct": ("ct", "computed tomography"),
+    "mri": ("mri", "magnetic resonance", "t1", "t2", "flair"),
+    "pathology": ("pathology", "histolog", "microscop", "stain", "h&e"),
+}
+
+
+def load_dataset(config: dict[str, Any] | None = None) -> list[Sample]:
+    config = dict(config or {})
+    name = config.pop("name", "synthetic")
+
+    if name == "synthetic":
+        return build_synthetic_dataset(**config)
+    if name in _HF_REPOS:
+        return _load_hf(name, config)
+    if name == "omnimedvqa":
+        return _load_omnimedvqa(config)
+    raise ValueError(f"Unknown dataset {name!r}.")
+
+
+def _guess_modality(text: str, default: str = "unknown") -> str:
+    t = (text or "").lower()
+    for mod, kws in _MODALITY_KEYWORDS.items():
+        if any(k in t for k in kws):
+            return mod
+    return default
+
+
+def _norm_answer(ans: Any) -> str:
+    return str(ans).strip().lower()
+
+
+_YESNO = {"yes", "no"}
+
+
+def _get_image_size(img: Any) -> tuple[int | None, int | None]:
+    """Return (width, height) for a PIL image or an image file path."""
+    if img is None:
+        return None, None
+    # PIL Image object
+    if hasattr(img, "size"):
+        return img.size  # (width, height)
+    # File path
+    if isinstance(img, str) and Path(img).is_file():
+        try:
+            from PIL import Image
+            with Image.open(img) as pil_img:
+                return pil_img.size
+        except Exception:
+            return None, None
+    return None, None
+
+
+def _load_hf(name: str, config: dict[str, Any]) -> list[Sample]:
+    """Load VQA-RAD / SLAKE / PathVQA from a public HF mirror.
+
+    Per-dataset schema notes (verified 2026-07-03 against the live mirrors):
+      * vqa_rad (flaviagiammarino/vqa-rad): columns image/question/answer only.
+        No modality field (tagged from text) and no per-QA boxes in this mirror.
+      * slake (BoKelvin/SLAKE): rich JSON — modality, answer_type (OPEN/CLOSED),
+        q_lang (en/zh), location, img_name. Images are referenced by path, NOT
+        inline; set ``image_root`` to the extracted imgs/ dir to attach PIL
+        images. No per-QA bbox in this mirror either (SLAKE ships masks
+        separately) — Signal B IoU on real SLAKE stays unvalidated until masks
+        are wired (see BLOCKERS.md); we still get true modality labels here.
+      * pathvqa (flaviagiammarino/path-vqa): image/question/answer; all pathology.
+
+    External bounding boxes
+    -----------------------
+    When ``bbox_file`` is set in the config (a path to a JSON file), it is loaded
+    and used to attach ``gt_region`` for Signal B IoU validation. The JSON format:
+
+      For SLAKE: ``{img_name: {location: [x, y, w, h]}}``
+      For VQA-RAD/PathVQA: ``{sample_id: [x, y, w, h]}``
+
+    Bounding boxes are in pixel coordinates; ``bbox_to_region()`` normalizes them.
+    """
+    try:
+        from datasets import load_dataset as hf_load
+    except Exception as exc:  # pragma: no cover
+        raise ImportError("`datasets` is required for real loaders (`pip install datasets`).") from exc
+
+    repo = _HF_REPOS[name]
+    split = config.get("split", "test")
+    max_samples = config.get("max_samples")
+    cache_dir = config.get("cache_dir")
+    english_only = config.get("english_only", True)
+    image_root = config.get("image_root")
+    bbox_file = config.get("bbox_file")
+
+    # Load external bounding boxes if provided.
+    bboxes: dict = {}
+    if bbox_file and Path(bbox_file).is_file():
+        bboxes = json.loads(Path(bbox_file).read_text())
+        print(f"[loader] loaded {len(bboxes)} bounding-box entries from {bbox_file}")
+
+    ds = hf_load(repo, split=split, cache_dir=cache_dir)
+
+    samples: list[Sample] = []
+    for i, row in enumerate(ds):
+        if name == "slake" and english_only and row.get("q_lang", "en") != "en":
+            continue
+        q = row.get("question") or row.get("question_text") or ""
+        a = _norm_answer(row.get("answer") or row.get("answer_text") or "")
+
+        # Modality: real label on SLAKE; text-guess elsewhere.
+        if name == "slake" and row.get("modality"):
+            modality = str(row["modality"]).lower().replace("-", "").replace(" ", "")
+            modality = {"xray": "xray", "cxr": "xray"}.get(modality, modality)
+        else:
+            modality = _guess_modality(f"{q} {row.get('location', '')}",
+                                       default="pathology" if name == "pathvqa" else "unknown")
+
+        # Image: inline PIL where present; else resolve img_name against image_root.
+        img = row.get("image")
+        if img is None and name == "slake" and row.get("img_name"):
+            img_rel = row["img_name"]
+            candidates = [
+                Path(image_root) / img_rel if image_root else None,
+                Path(image_root) / "imgs" / img_rel if image_root else None,
+                Path("slake_imgs") / img_rel,
+                Path("slake_imgs") / "imgs" / img_rel,
+                Path("/kaggle/working/fmr-thesis/slake_imgs") / img_rel,
+                Path("/kaggle/working/fmr-thesis/slake_imgs/imgs") / img_rel,
+                Path("/kaggle/working/slake_imgs") / img_rel,
+                Path("/kaggle/working/slake_imgs/imgs") / img_rel,
+            ]
+            found = False
+            for c in candidates:
+                if c and c.exists():
+                    img = str(c)
+                    found = True
+                    break
+            if not found and image_root:
+                img = str(Path(image_root) / img_rel)
+
+        # Closed (yes/no or explicitly CLOSED) -> give binary choices for clean metrics.
+        answer_type = str(row.get("answer_type", "")).upper()
+        choices = ["yes", "no"] if (a in _YESNO and answer_type != "OPEN") else None
+
+        # Resolve ground-truth bounding box from external file.
+        sample_id = f"{name}-{split}-{i:06d}"
+        gt_region = None
+        if bboxes:
+            # SLAKE bboxes are keyed by img_name -> {location: [x,y,w,h]}
+            img_name = row.get("img_name")
+            location = (row.get("location") or "").strip()
+            if img_name and img_name in bboxes:
+                entry = bboxes[img_name]
+                # entry is either {location: [x,y,w,h]} or [x,y,w,h]
+                bbox = entry.get(location, entry) if isinstance(entry, dict) else entry
+                if isinstance(bbox, list) and len(bbox) == 4:
+                    # Need image dimensions for normalization
+                    iw, ih = _get_image_size(img)
+                    if iw and ih:
+                        gt_region = bbox_to_region(bbox, iw, ih)
+            # VQA-RAD/PathVQA bboxes are keyed by sample_id -> [x,y,w,h]
+            elif sample_id in bboxes:
+                bbox = bboxes[sample_id]
+                if isinstance(bbox, list) and len(bbox) == 4:
+                    iw, ih = _get_image_size(img)
+                    if iw and ih:
+                        gt_region = bbox_to_region(bbox, iw, ih)
+
+        samples.append(
+            Sample(
+                sample_id=sample_id,
+                question=str(q),
+                answer=a,
+                modality=modality,
+                image=img,
+                gt_region=gt_region,
+                answer_choices=choices,
+                meta={
+                    "source": name, "raw_answer": row.get("answer"),
+                    "answer_type": answer_type or None,
+                    "closed": choices is not None,
+                    "img_name": row.get("img_name"),
+                    "location": row.get("location"),
+                },
+            )
+        )
+        if max_samples and len(samples) >= int(max_samples):
+            break
+
+    n_with_bbox = sum(1 for s in samples if s.gt_region is not None)
+    if bboxes:
+        print(f"[loader] {n_with_bbox}/{len(samples)} samples have gt_region attached")
+    return samples
+
+
+def bbox_to_region(bbox: list[float], image_width: float, image_height: float) -> Region | None:
+    """Convert a pixel [x, y, w, h] box to a normalized Region.
+
+    Kept as a reusable helper for the Colab SLAKE-mask path: when the SLAKE
+    segmentation masks are downloaded, derive a bounding box per (image,
+    location) and call this to attach ``gt_region`` for Signal B IoU validation.
+    """
+    if not bbox or len(bbox) != 4 or image_width <= 0 or image_height <= 0:
+        return None
+    x, y, w, h = (float(v) for v in bbox)
+    return Region(x / image_width, y / image_height,
+                  (x + w) / image_width, (y + h) / image_height)
+
+
+# OmniMedVQA `modality_type` strings -> our canonical modality tags.
+_OMNI_MODALITY = {
+    "ct": "ct", "computed tomography": "ct",
+    "mr": "mri", "mri": "mri", "magnetic resonance": "mri",
+    "x-ray": "xray", "xray": "xray", "cxr": "xray",
+    "microscopy": "pathology", "histopath": "pathology", "pathology": "pathology",
+    "dermoscopy": "dermoscopy", "fundus": "fundus", "oct": "oct",
+    "ultrasound": "ultrasound", "endoscopy": "endoscopy",
+}
+
+
+def _omni_modality(raw: str) -> str:
+    t = (raw or "").lower()
+    for k, v in _OMNI_MODALITY.items():
+        if k in t:
+            return v
+    return "other"
+
+
+def _load_omnimedvqa(config: dict[str, Any]) -> list[Sample]:
+    """OmniMedVQA from a manually-downloaded local root (see BLOCKERS.md).
+
+    Parses the open-access QA JSON layout: one or more ``*.json`` files (each a
+    list of records) anywhere under ``root``, with fields ``question``,
+    ``gt_answer``, ``option_A..D``, ``image_path``, ``modality_type`` (and
+    optionally ``dataset``/``question_id``). Multiple-choice, so every item is
+    "closed" with ``answer_choices`` set — clean metrics + a well-defined
+    held-out-modality split (12 modalities in the full set). ``image_path`` is
+    resolved against ``root`` (or ``image_root`` if the images live elsewhere).
+    """
+    root = config.get("root")
+    if not root or not Path(root).exists():
+        raise FileNotFoundError(
+            f"OmniMedVQA not found at root={root!r}. Download the open-access subset "
+            "and set data.yaml:omnimedvqa.root. (Gated distribution — see BLOCKERS.md.)"
+        )
+    import json
+
+    root = Path(root)
+    image_root = Path(config.get("image_root", root))
+    max_samples = config.get("max_samples")
+    modalities_filter = config.get("modalities")  # optional list to restrict to
+
+    qa_files = sorted(p for p in root.rglob("*.json") if "image" not in p.name.lower())
+    samples: list[Sample] = []
+    for qf in qa_files:
+        try:
+            records = json.loads(qf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(records, dict):
+            records = records.get("data", records.get("questions", []))
+        for i, row in enumerate(records):
+            opts = [row[k] for k in ("option_A", "option_B", "option_C", "option_D")
+                    if row.get(k) not in (None, "")]
+            gt = _norm_answer(row.get("gt_answer") or row.get("answer") or "")
+            modality = _omni_modality(row.get("modality_type") or row.get("modality") or "")
+            if modalities_filter and modality not in modalities_filter:
+                continue
+            img_rel = row.get("image_path") or row.get("image")
+            img = str(image_root / img_rel) if img_rel else None
+            qid = row.get("question_id") or f"{qf.stem}-{i}"
+            samples.append(
+                Sample(
+                    sample_id=f"omnimedvqa-{qid}",
+                    question=str(row.get("question", "")),
+                    answer=gt,
+                    modality=modality,
+                    image=img,
+                    gt_region=None,
+                    answer_choices=[_norm_answer(o) for o in opts] or None,
+                    meta={"source": "omnimedvqa", "closed": bool(opts),
+                          "dataset": row.get("dataset"), "modality_type": row.get("modality_type"),
+                          "answer_type": "CLOSED" if opts else "OPEN"},
+                )
+            )
+            if max_samples and len(samples) >= int(max_samples):
+                return samples
+    if not samples:
+        raise ValueError(f"OmniMedVQA root {root} had no parseable QA JSON records.")
+    return samples
+
+
+def split_dataset(
+    samples: list[Sample],
+    fractions: tuple[float, float, float] = (0.5, 0.25, 0.25),
+    holdout_modality: str | None = None,
+    seed: int = 13,
+) -> dict[str, list[Sample]]:
+    """Split into train / calibration / test.
+
+    ``train`` feeds the learned verifier, ``cal`` feeds the split-conformal gate,
+    ``test`` is held out for reporting. If ``holdout_modality`` is set, all of
+    that modality is moved into a separate ``holdout`` split to test
+    generalization to an unseen modality (per the proposal's held-out experiment).
+    """
+    assert abs(sum(fractions) - 1.0) < 1e-6, "fractions must sum to 1"
+    rng = np.random.default_rng(seed)
+
+    pool = list(samples)
+    holdout: list[Sample] = []
+    if holdout_modality is not None:
+        holdout = [s for s in pool if s.modality == holdout_modality]
+        pool = [s for s in pool if s.modality != holdout_modality]
+
+    idx = rng.permutation(len(pool))
+    n_train = int(fractions[0] * len(pool))
+    n_cal = int(fractions[1] * len(pool))
+    train = [pool[i] for i in idx[:n_train]]
+    cal = [pool[i] for i in idx[n_train:n_train + n_cal]]
+    test = [pool[i] for i in idx[n_train + n_cal:]]
+
+    out = {"train": train, "cal": cal, "test": test}
+    if holdout_modality is not None:
+        out["holdout"] = holdout
+    return out
